@@ -19,6 +19,12 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 
+from tenacity import (  # lazy — already a runtime dep
+            AsyncRetrying,
+            retry_if_exception,
+            stop_after_attempt,
+            wait_exponential,
+        )
 from src.config import Settings
 
 if TYPE_CHECKING:
@@ -122,26 +128,29 @@ class OracleClient:
                 "OracleClient not initialised — call initialize() first."
             )
 
+        
+
         start = time.perf_counter()
-        connection: Any = None  # oracledb.AsyncConnection at runtime
+        # oracle_query_retry_attempts=0 → 1 attempt (no retry)
+        max_attempts = self._settings.oracle_query_retry_attempts + 1
 
         try:
-            connection = await self._pool.acquire()
-            async with connection.cursor() as cursor:
-                await cursor.execute(sql, bind_params)
-                # Fetch column names from cursor description
-                col_names: list[str] = [col[0] for col in cursor.description]
-                raw_rows = await cursor.fetchmany(max_rows)
+            rows: list[dict[str, Any]] = []
+            async for attempt in AsyncRetrying(
+                retry=retry_if_exception(lambda e: not isinstance(e, OracleClientError)),
+                stop=stop_after_attempt(max_attempts),
+                wait=wait_exponential(multiplier=1, min=1, max=4),
+                reraise=True,
+            ):
+                with attempt:
+                    rows = await self._execute_once(sql, bind_params, max_rows)
 
-            rows = [dict(zip(col_names, row)) for row in raw_rows]
             latency_ms = (time.perf_counter() - start) * 1000
-
             log.info(
                 "oracle_query_ok",
                 query_key=query_key,
                 row_count=len(rows),
                 latency_ms=round(latency_ms, 2),
-                # Bind params logged with values truncated to avoid leaking PII
                 bind_keys=list(bind_params.keys()),
             )
             return rows
@@ -159,6 +168,22 @@ class OracleClient:
             raise OracleClientError(
                 f"Query '{query_key}' failed: {exc}"
             ) from exc
+
+    async def _execute_once(
+        self,
+        sql: str,
+        bind_params: dict[str, Any],
+        max_rows: int,
+    ) -> list[dict[str, Any]]:
+        """Run a single query attempt; always releases the connection."""
+        connection: Any = None
+        try:
+            connection = await self._pool.acquire()
+            async with connection.cursor() as cursor:
+                await cursor.execute(sql, bind_params)
+                col_names: list[str] = [col[0] for col in cursor.description]
+                raw_rows = await cursor.fetchmany(max_rows)
+            return [dict(zip(col_names, row)) for row in raw_rows]
         finally:
             if connection is not None:
                 await self._pool.release(connection)

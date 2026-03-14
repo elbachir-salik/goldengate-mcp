@@ -17,6 +17,7 @@ that a failing audit write never blocks or fails the tool response.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 from datetime import datetime, timezone
@@ -133,9 +134,18 @@ class AuditLog:
     # ------------------------------------------------------------------
 
     async def _write_file(self, entry: dict) -> None:
-        """Append *entry* as a JSON line to the configured audit log file."""
+        """Append *entry* as a JSON line to the configured audit log file.
+
+        The write runs in a thread executor so slow filesystem I/O never
+        blocks the event loop.
+        """
         line = json.dumps(entry, default=str) + "\n"
-        with open(self._settings.audit_log_file_path, "a", encoding="utf-8") as fh:
+        path = self._settings.audit_log_file_path
+        await asyncio.to_thread(self._sync_write_file, path, line)
+
+    @staticmethod
+    def _sync_write_file(path: str, line: str) -> None:
+        with open(path, "a", encoding="utf-8") as fh:
             fh.write(line)
 
     async def _write_oracle(self, entry: dict) -> None:

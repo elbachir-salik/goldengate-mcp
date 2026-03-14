@@ -131,6 +131,7 @@ All settings are loaded from environment variables (or `.env` file).
 | `ORACLE_PASSWORD` | *(required)* | Oracle password |
 | `ORACLE_POOL_MIN` | `2` | Minimum pool connections |
 | `ORACLE_POOL_MAX` | `10` | Maximum pool connections |
+| `ORACLE_QUERY_RETRY_ATTEMPTS` | `2` | Retries on transient Oracle errors (`0` = no retry) |
 | `ANTHROPIC_API_KEY` | *(optional)* | Required for score tools |
 | `KAFKA_BROKERS` | *(optional)* | Comma-separated brokers; leave empty to disable Kafka |
 | `KAFKA_CONSUMER_GROUP` | `goldengate-mcp` | Kafka consumer group ID |

@@ -37,9 +37,10 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------
     oracle_dsn: str = "localhost:1521/ORCL"
     oracle_user: str = "mcp_reader"
-    oracle_password: SecretStr = SecretStr("changeme")
+    oracle_password: SecretStr  # required — no default; set ORACLE_PASSWORD in .env
     oracle_pool_min: int = 2
     oracle_pool_max: int = 10
+    oracle_query_retry_attempts: int = 2  # retries on transient errors (0 = no retry)
 
     # ------------------------------------------------------------------
     # Anthropic (used by score/classify tools — Phase 2)
