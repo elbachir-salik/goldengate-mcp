@@ -1,0 +1,73 @@
+# schema_map.yaml — bank-specific table and column mappings
+#
+# Edit this file to match your Oracle replica schema.
+# Logical names (left side) are used throughout the codebase.
+# Physical names (right side) are the actual Oracle table/column names.
+# No physical names appear anywhere else in the source code.
+#
+# version: bump when making breaking changes to entity structure.
+
+version: "1.0"
+
+entities:
+
+  customer:
+    table: BANKING.CUSTOMER_MASTER
+    columns:
+      id:           CUSTOMER_ID
+      name:         FULL_NAME
+      status:       CUST_STATUS
+      kyc_status:   KYC_FLAG
+      risk_rating:  RISK_CATEGORY
+      created_at:   CREATED_DATE
+      updated_at:   LAST_MODIFIED
+
+  account:
+    table: BANKING.ACCOUNT_MASTER
+    columns:
+      id:                ACCOUNT_NUMBER
+      customer_id:       CUSTOMER_ID
+      type:              ACCOUNT_TYPE
+      currency:          CURRENCY_CODE
+      balance:           CURRENT_BALANCE
+      available_balance: AVAILABLE_BALANCE
+      status:            ACCOUNT_STATUS
+      opened_at:         OPEN_DATE
+
+  transaction:
+    table: BANKING.TRANSACTION_LOG
+    columns:
+      id:           TXN_REFERENCE
+      account_id:   ACCOUNT_NUMBER
+      amount:       TXN_AMOUNT
+      currency:     CURRENCY_CODE
+      type:         TXN_TYPE
+      channel:      CHANNEL_CODE
+      counterparty: COUNTERPARTY_REF
+      value_date:   VALUE_DATE
+      booking_date: BOOKING_DATE
+      status:       TXN_STATUS
+      narrative:    NARRATIVE_TEXT
+
+  gl_entry:
+    table: BANKING.GL_BALANCE
+    columns:
+      account_code:   GL_ACCOUNT_CODE
+      currency:       CURRENCY_CODE
+      value_date:     VALUE_DATE
+      debit_balance:  DR_BALANCE
+      credit_balance: CR_BALANCE
+      net_balance:    NET_BALANCE
+
+  alert:
+    table: BANKING.ALERT_QUEUE
+    columns:
+      id:           ALERT_ID
+      type:         ALERT_TYPE
+      subject_id:   SUBJECT_ID
+      subject_type: SUBJECT_TYPE
+      severity:     SEVERITY_LEVEL
+      status:       ALERT_STATUS
+      created_at:   CREATED_TIMESTAMP
+      updated_at:   LAST_UPDATE_TS
+      description:  ALERT_DESCRIPTION
