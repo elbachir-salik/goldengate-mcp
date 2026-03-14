@@ -160,7 +160,6 @@ Example — adding a new entity requires only a YAML edit:
 entities:
   my_entity:
     table: BANKING.MY_TABLE
-    id_column: MY_PK_COL
     columns:
       id: MY_PK_COL
       status: STATUS_CODE
