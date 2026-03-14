@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from src.audit.audit_log import AuditLog, hash_payload
 from src.auth.rbac import require_role
+from src.tools.common import caller_id as _caller_id
 from src.writeback.circuit_breaker import CircuitBreaker, CircuitBreakerOpenError
 from src.writeback.rest_client import WritebackError
 
@@ -108,19 +109,6 @@ def _get_circuit_breaker() -> CircuitBreaker:
 def _get_audit_log() -> AuditLog:
     from src.server import get_audit_log  # type: ignore[import]
     return get_audit_log()
-
-
-# ------------------------------------------------------------------
-# Internal helpers
-# ------------------------------------------------------------------
-
-def _caller_id(ctx: Context | None) -> str:
-    if ctx is None:
-        return "unknown"
-    meta = getattr(ctx, "meta", None)
-    if not isinstance(meta, dict):
-        return "unknown"
-    return str(meta.get("caller_id") or meta.get("role") or "unknown")
 
 
 # ------------------------------------------------------------------

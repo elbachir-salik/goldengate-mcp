@@ -28,6 +28,7 @@ from src.audit.audit_log import AuditLog, hash_payload
 from src.auth.rbac import require_role
 from src.db import queries
 from src.schema.mapper import SchemaConfigError, SchemaMapper
+from src.tools.common import caller_id as _caller_id, map_row_to_logical as _map_row_to_logical
 
 mcp = FastMCP("goldengate-read-tools")
 
@@ -94,31 +95,6 @@ def _get_audit_log() -> AuditLog:
 def _get_mapper() -> SchemaMapper:
     from src.schema.mapper import get_mapper
     return get_mapper()
-
-
-def _map_row_to_logical(
-    row: dict[str, Any],
-    mapper: SchemaMapper,
-    entity_type: str,
-) -> dict[str, Any]:
-    """Translate a row dict from physical column names back to logical names.
-
-    Args:
-        row:         Dict keyed by physical Oracle column names (upper-cased).
-        mapper:      SchemaMapper instance.
-        entity_type: Logical entity type name.
-
-    Returns:
-        Dict keyed by logical column names.
-    """
-    # Build reverse map: physical_name (upper) -> logical_name
-    physical_to_logical = {
-        v.upper(): k for k, v in mapper.all_columns(entity_type).items()
-    }
-    return {
-        physical_to_logical.get(k.upper(), k.lower()): v
-        for k, v in row.items()
-    }
 
 
 # ------------------------------------------------------------------
@@ -555,15 +531,3 @@ async def get_open_alerts(
     return [_map_row_to_logical(row, mapper, "alert") for row in rows]
 
 
-# ------------------------------------------------------------------
-# Internal helpers
-# ------------------------------------------------------------------
-
-def _caller_id(ctx: Context | None) -> str:
-    """Extract a caller identifier string from FastMCP context."""
-    if ctx is None:
-        return "unknown"
-    meta = getattr(ctx, "meta", None)
-    if not isinstance(meta, dict):
-        return "unknown"
-    return str(meta.get("caller_id") or meta.get("role") or "unknown")

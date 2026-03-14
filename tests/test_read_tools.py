@@ -29,9 +29,9 @@ import pytest
 from pydantic import ValidationError
 
 from src.schema.mapper import SchemaMapper
+from src.tools.common import map_row_to_logical as _map_row_to_logical
 from src.tools.read_tools import (
     EntityNotFoundError,
-    _map_row_to_logical,
     get_entity,
     get_transaction_history,
 )

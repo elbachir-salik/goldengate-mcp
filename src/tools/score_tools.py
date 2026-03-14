@@ -27,6 +27,7 @@ from src.audit.audit_log import AuditLog, hash_payload
 from src.auth.rbac import require_role
 from src.db import queries
 from src.schema.mapper import SchemaMapper
+from src.tools.common import caller_id as _caller_id, map_row_to_logical as _map_row_to_logical
 
 mcp = FastMCP("goldengate-score-tools")
 
@@ -157,31 +158,36 @@ def _get_mapper() -> SchemaMapper:
     return get_mapper()
 
 
+def _score_model() -> str:
+    """Return the configured Anthropic model name for score tools."""
+    from src.config import get_settings  # type: ignore[import]
+    return get_settings().anthropic_score_model
+
+
 # ------------------------------------------------------------------
 # Internal helpers
 # ------------------------------------------------------------------
 
-def _caller_id(ctx: Context | None) -> str:
-    if ctx is None:
-        return "unknown"
-    meta = getattr(ctx, "meta", None)
-    if not isinstance(meta, dict):
-        return "unknown"
-    return str(meta.get("caller_id") or meta.get("role") or "unknown")
-
-
-def _map_row_to_logical(
-    row: dict[str, Any],
+async def _fetch_entity_safe(
+    oracle_client: Any,
     mapper: SchemaMapper,
     entity_type: str,
-) -> dict[str, Any]:
-    physical_to_logical = {
-        v.upper(): k for k, v in mapper.all_columns(entity_type).items()
-    }
-    return {
-        physical_to_logical.get(k.upper(), k.lower()): v
-        for k, v in row.items()
-    }
+    entity_id: str,
+) -> dict[str, Any] | None:
+    """Try to fetch an entity; return None on not-found or any error."""
+    try:
+        sql = queries.build_get_entity_query(mapper, entity_type)
+        rows = await oracle_client.query(
+            query_key=queries.GET_ENTITY,
+            sql=sql,
+            bind_params={"entity_id": entity_id},
+            max_rows=1,
+        )
+        if rows:
+            return _map_row_to_logical(rows[0], mapper, entity_type)
+    except Exception:
+        pass
+    return None
 
 
 def _parse_llm_json(text: str) -> dict[str, Any]:
@@ -299,7 +305,7 @@ async def _call_score_llm(
     try:
         msg = await asyncio.wait_for(
             client.messages.create(
-                model="claude-sonnet-4-6",
+                model=_score_model(),
                 max_tokens=256,
                 system=_SCORE_SYSTEM_PROMPT,
                 messages=messages,
@@ -455,7 +461,7 @@ async def _call_classify_llm(
 
     try:
         msg = await client.messages.create(
-            model="claude-sonnet-4-6",
+            model=_score_model(),
             max_tokens=512,
             system=_CLASSIFY_SYSTEM_PROMPT,
             messages=messages,
@@ -523,9 +529,13 @@ async def generate_report_draft(
                       ``"CTR"`` (Currency Transaction Report), or
                       ``"compliance_summary"`` (internal summary).
         subject_id:   Entity ID of the report subject (customer or account).
-                      Alphanumeric, dash, underscore only (max 100 chars).
+                      The subject entity is fetched from the Oracle replica
+                      (customer first, then account). Alphanumeric, dash,
+                      underscore only (max 100 chars).
         evidence_ids: List of alert or transaction IDs that support the
-                      report.  1–20 IDs, alphanumeric, dash, underscore.
+                      report. Each is fetched from the replica (alert first,
+                      then transaction). 1–20 IDs, alphanumeric, dash,
+                      underscore.
         ctx:          FastMCP context (injected by the framework).
 
     Returns:
@@ -551,12 +561,29 @@ async def generate_report_draft(
         evidence_ids=evidence_ids,
     )
 
+    # Fetch subject entity (try customer first, then account — best-effort)
+    mapper = _get_mapper()
+    oracle_client = _get_oracle_client()
+    subject_data = await _fetch_entity_safe(oracle_client, mapper, "customer", validated.subject_id)
+    if subject_data is None:
+        subject_data = await _fetch_entity_safe(oracle_client, mapper, "account", validated.subject_id)
+
+    # Fetch each evidence entity (try alert first, then transaction — best-effort)
+    evidence_data: list[dict[str, Any]] = []
+    for eid in validated.evidence_ids:
+        entity = await _fetch_entity_safe(oracle_client, mapper, "alert", eid)
+        if entity is None:
+            entity = await _fetch_entity_safe(oracle_client, mapper, "transaction", eid)
+        evidence_data.append({"id": eid, "data": entity})
+
     client = _get_anthropic_client()
     draft_narrative = await _call_report_llm(
         client,
         validated.report_type,
         validated.subject_id,
+        subject_data,
         validated.evidence_ids,
+        evidence_data,
     )
 
     result: dict[str, Any] = {
@@ -588,7 +615,9 @@ async def _call_report_llm(
     client: Any,
     report_type: str,
     subject_id: str,
+    subject_data: dict[str, Any] | None,
     evidence_ids: list[str],
+    evidence_data: list[dict[str, Any]],
 ) -> str:
     """Call the LLM to draft a report narrative. Returns an error string on failure."""
     messages = [
@@ -602,14 +631,16 @@ async def _call_report_llm(
                         "Return only the JSON object specified in your instructions."
                     ),
                 },
-                # User-controlled identifiers in a separate block — not in system prompt
+                # User-controlled identifiers and fetched entity data in a separate block
                 {
                     "type": "text",
                     "text": json.dumps(
                         {
                             "report_type": report_type,
                             "subject_id": subject_id,
+                            "subject": subject_data,
                             "evidence_ids": evidence_ids,
+                            "evidence": evidence_data,
                         },
                         default=str,
                     ),
@@ -620,7 +651,7 @@ async def _call_report_llm(
 
     try:
         msg = await client.messages.create(
-            model="claude-sonnet-4-6",
+            model=_score_model(),
             max_tokens=1024,
             system=_REPORT_SYSTEM_PROMPT,
             messages=messages,

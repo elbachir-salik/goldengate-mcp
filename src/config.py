@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     # Anthropic (used by score/classify tools — Phase 2)
     # ------------------------------------------------------------------
     anthropic_api_key: SecretStr = SecretStr("")
+    anthropic_score_model: str = "claude-sonnet-4-6"
 
     # ------------------------------------------------------------------
     # Kafka (optional — leave empty string to disable)
