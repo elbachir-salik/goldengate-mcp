@@ -334,3 +334,163 @@ async def _call_score_llm(
         "confidence": confidence,
         "timed_out": False,
     }
+
+
+# ------------------------------------------------------------------
+# Tool — classify_alert
+# ------------------------------------------------------------------
+
+class _AlertNotFoundError(LookupError):
+    """Raised when classify_alert cannot find the alert entity."""
+
+
+@mcp.tool()
+@require_role("score")
+async def classify_alert(
+    alert_id: str,
+    alert_type: str | None = None,
+    ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Fetch an alert from the Oracle replica and classify it via LLM.
+
+    Determines whether the alert is a false positive and recommends a next
+    action.  User-controlled fields (the alert payload) are passed in a
+    separate structured content block — never interpolated into the system
+    prompt.
+
+    Args:
+        alert_id:   Alert primary key.  Alphanumeric, dash, underscore only
+                    (max 100 chars).
+        alert_type: Optional type hint for context (``"fraud"``, ``"aml"``,
+                    ``"recon_break"``, ``"custom"``).  Pass ``None`` to skip.
+        ctx:        FastMCP context (injected by the framework).
+
+    Returns:
+        Dict with keys:
+
+        - ``alert_id``           (str):   The classified alert ID.
+        - ``is_false_positive``  (bool):  LLM verdict.
+        - ``confidence``         (float): Model confidence 0.0–1.0.
+        - ``reasoning``          (str):   LLM explanation.
+        - ``recommended_action`` (str):   Suggested next step.
+
+    Raises:
+        ValidationError:    If alert_id or alert_type fails validation.
+        _AlertNotFoundError: If no alert with the given ID exists in Oracle.
+                             Try ``get_open_alerts()`` to browse available alerts.
+    """
+    start = time.perf_counter()
+    caller_id = _caller_id(ctx)
+
+    validated = _ClassifyAlertInput(alert_id=alert_id, alert_type=alert_type)
+
+    # Fetch the alert entity from Oracle
+    mapper = _get_mapper()
+    sql = queries.build_get_entity_query(mapper, "alert")
+    client_db = _get_oracle_client()
+    rows = await client_db.query(
+        query_key=queries.GET_ENTITY,
+        sql=sql,
+        bind_params={"entity_id": validated.alert_id},
+        max_rows=1,
+    )
+
+    if not rows:
+        raise _AlertNotFoundError(
+            f"No alert found with id '{validated.alert_id}'. "
+            f"Use get_open_alerts() to browse available alerts, "
+            f"or verify the alert_id is correct."
+        )
+
+    alert_row = _map_row_to_logical(rows[0], mapper, "alert")
+
+    # Call LLM — user data in structured block, not in system prompt
+    llm_client = _get_anthropic_client()
+    result = await _call_classify_llm(llm_client, validated.alert_id, alert_row, alert_type)
+
+    latency_ms = (time.perf_counter() - start) * 1000
+    await _get_audit_log().record(
+        tool_name="classify_alert",
+        caller_id=caller_id,
+        input_hash=hash_payload({
+            "alert_id": validated.alert_id,
+            "alert_type": validated.alert_type,
+        }),
+        output_hash=hash_payload(result),
+        latency_ms=latency_ms,
+        decision="false_positive" if result.get("is_false_positive") else "genuine",
+    )
+    return result
+
+
+async def _call_classify_llm(
+    client: Any,
+    alert_id: str,
+    alert_row: dict[str, Any],
+    alert_type: str | None,
+) -> dict[str, Any]:
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": (
+                        "Classify the following banking alert. "
+                        "Determine if it is a false positive. "
+                        "Return only the JSON object specified in your instructions."
+                    ),
+                },
+                # User-controlled alert data in a separate block
+                {
+                    "type": "text",
+                    "text": json.dumps(
+                        {"alert_id": alert_id, "alert_type": alert_type, "alert": alert_row},
+                        default=str,
+                    ),
+                },
+            ],
+        }
+    ]
+
+    try:
+        msg = await client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=512,
+            system=_CLASSIFY_SYSTEM_PROMPT,
+            messages=messages,
+        )
+    except Exception:
+        return {
+            "alert_id": alert_id,
+            "is_false_positive": False,
+            "confidence": 0.0,
+            "reasoning": (
+                "LLM classification failed. "
+                "Manual review required. "
+                "Retry classify_alert() or escalate to a compliance officer."
+            ),
+            "recommended_action": "escalate_to_compliance",
+        }
+
+    raw = msg.content[0].text if msg.content else ""
+    parsed = _parse_llm_json(raw)
+
+    is_fp = bool(parsed.get("is_false_positive", False))
+    confidence = parsed.get("confidence", 0.5)
+    reasoning = parsed.get("reasoning", "No reasoning provided.")
+    action = parsed.get("recommended_action", "manual_review")
+
+    try:
+        confidence = float(confidence)
+    except (TypeError, ValueError):
+        confidence = 0.5
+    confidence = max(0.0, min(1.0, confidence))
+
+    return {
+        "alert_id": alert_id,
+        "is_false_positive": is_fp,
+        "confidence": confidence,
+        "reasoning": reasoning,
+        "recommended_action": action,
+    }
