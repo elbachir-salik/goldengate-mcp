@@ -139,8 +139,8 @@ SchemaMapper (singleton, parsed at startup)
     │
     ├── resolve_table(entity_type)   →  "BANKING.CUSTOMER_MASTER"
     ├── resolve_column(entity_type, logical_name)  →  "CUST_ID"
-    ├── all_columns(entity_type)     →  {logical: physical, ...}
-    └── id_column(entity_type)       →  physical PK column name
+    ├── resolve_column(entity_type, "id")          →  physical PK column name
+    └── all_columns(entity_type)     →  {logical: physical, ...}
 ```
 
 Adding a new queryable entity requires only a YAML edit — no Python changes.
