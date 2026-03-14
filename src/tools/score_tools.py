@@ -494,3 +494,147 @@ async def _call_classify_llm(
         "reasoning": reasoning,
         "recommended_action": action,
     }
+
+
+# ------------------------------------------------------------------
+# Tool — generate_report_draft
+# ------------------------------------------------------------------
+
+@mcp.tool()
+@require_role("score")
+async def generate_report_draft(
+    report_type: str,
+    subject_id: str,
+    evidence_ids: list[str],
+    ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Generate a draft SAR / compliance report narrative for human review.
+
+    Calls ``claude-sonnet-4-6`` to produce a professional report narrative.
+    **This tool NEVER submits the report.**  The output always carries a
+    mandatory human-review gate — a licensed compliance officer must review
+    and approve before any submission to a regulatory authority.
+
+    User-controlled fields (subject_id, evidence_ids) are passed in a
+    separate structured content block to prevent prompt injection.
+
+    Args:
+        report_type:  One of ``"SAR"`` (Suspicious Activity Report),
+                      ``"CTR"`` (Currency Transaction Report), or
+                      ``"compliance_summary"`` (internal summary).
+        subject_id:   Entity ID of the report subject (customer or account).
+                      Alphanumeric, dash, underscore only (max 100 chars).
+        evidence_ids: List of alert or transaction IDs that support the
+                      report.  1–20 IDs, alphanumeric, dash, underscore.
+        ctx:          FastMCP context (injected by the framework).
+
+    Returns:
+        Dict with keys:
+
+        - ``report_type``           (str):  As supplied.
+        - ``subject_id``            (str):  As supplied.
+        - ``evidence_ids``          (list): As supplied.
+        - ``draft_narrative``       (str):  LLM-generated report text.
+        - ``HUMAN_REVIEW_REQUIRED`` (bool): Always ``True``.
+        - ``disclaimer``            (str):  Mandatory submission warning.
+
+    Raises:
+        ValidationError: If report_type is not recognised, subject_id contains
+                         invalid characters, or evidence_ids is empty / too long.
+    """
+    start = time.perf_counter()
+    caller_id = _caller_id(ctx)
+
+    validated = _GenerateReportDraftInput(
+        report_type=report_type,
+        subject_id=subject_id,
+        evidence_ids=evidence_ids,
+    )
+
+    client = _get_anthropic_client()
+    draft_narrative = await _call_report_llm(
+        client,
+        validated.report_type,
+        validated.subject_id,
+        validated.evidence_ids,
+    )
+
+    result: dict[str, Any] = {
+        "report_type": validated.report_type,
+        "subject_id": validated.subject_id,
+        "evidence_ids": validated.evidence_ids,
+        "draft_narrative": draft_narrative,
+        "HUMAN_REVIEW_REQUIRED": True,
+        "disclaimer": _HUMAN_REVIEW_DISCLAIMER,
+    }
+
+    latency_ms = (time.perf_counter() - start) * 1000
+    await _get_audit_log().record(
+        tool_name="generate_report_draft",
+        caller_id=caller_id,
+        input_hash=hash_payload({
+            "report_type": validated.report_type,
+            "subject_id": validated.subject_id,
+            "evidence_count": len(validated.evidence_ids),
+        }),
+        output_hash=hash_payload(result),
+        latency_ms=latency_ms,
+        decision="draft_generated",
+    )
+    return result
+
+
+async def _call_report_llm(
+    client: Any,
+    report_type: str,
+    subject_id: str,
+    evidence_ids: list[str],
+) -> str:
+    """Call the LLM to draft a report narrative. Returns an error string on failure."""
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": (
+                        f"Draft a {report_type} report narrative. "
+                        "Return only the JSON object specified in your instructions."
+                    ),
+                },
+                # User-controlled identifiers in a separate block — not in system prompt
+                {
+                    "type": "text",
+                    "text": json.dumps(
+                        {
+                            "report_type": report_type,
+                            "subject_id": subject_id,
+                            "evidence_ids": evidence_ids,
+                        },
+                        default=str,
+                    ),
+                },
+            ],
+        }
+    ]
+
+    try:
+        msg = await client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=1024,
+            system=_REPORT_SYSTEM_PROMPT,
+            messages=messages,
+        )
+    except Exception:
+        return (
+            "Report generation failed due to an LLM error. "
+            "Retry generate_report_draft() or draft the narrative manually. "
+            "Do NOT submit until a compliance officer has reviewed the content."
+        )
+
+    raw = msg.content[0].text if msg.content else ""
+    parsed = _parse_llm_json(raw)
+    return parsed.get(
+        "draft_narrative",
+        "Draft narrative unavailable. Please draft manually and have a compliance officer review.",
+    )
