@@ -221,3 +221,97 @@ async def flag_entity(
     )
 
     return result
+
+
+# ------------------------------------------------------------------
+# Tool — post_adjustment
+# ------------------------------------------------------------------
+
+@mcp.tool()
+@require_role("write")
+async def post_adjustment(
+    adjustment_type: str,
+    payload: dict[str, Any],
+    reference: str,
+    ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Post a GL correcting entry, hold release, or workflow decision.
+
+    Subject to the same governance as ``flag_entity``:
+    - **Circuit breaker** — trips if write rate exceeds the configured limit.
+    - **Full audit log** — every call recorded regardless of outcome.
+    - **RBAC** — requires the ``"write"`` tier.
+
+    Args:
+        adjustment_type: One of ``"gl_correction"``, ``"hold_release"``,
+                         ``"workflow_approval"``, ``"workflow_rejection"``.
+        payload:         Adjustment-specific data dict passed as-is to the
+                         write-back endpoint. Contents depend on the receiving
+                         system — see your bank's API documentation.
+        reference:       Unique reference ID linking this adjustment to a
+                         case, alert, or transaction. Alphanumeric, dash,
+                         underscore only (max 100 chars).
+        ctx:             FastMCP context (injected by the framework).
+
+    Returns:
+        Dict with keys:
+
+        - ``adjustment_type`` (str):  As supplied.
+        - ``reference``       (str):  As supplied.
+        - ``status``          (str):  Outcome from the write-back endpoint.
+        - ``confirmation_id`` (str):  Confirmation ID (if returned by endpoint).
+
+    Raises:
+        ValidationError:         If any input fails validation.
+        CircuitBreakerOpenError: If the write rate limit is exceeded.
+        WritebackError:          If the write-back endpoint call fails.
+    """
+    start = time.perf_counter()
+    caller_id = _caller_id(ctx)
+
+    # 1. Validate inputs
+    validated = _PostAdjustmentInput(
+        adjustment_type=adjustment_type,
+        payload=payload,
+        reference=reference,
+    )
+
+    # 2. Circuit breaker
+    _get_circuit_breaker().check_and_record()
+
+    # 3. POST to write-back endpoint
+    wb_client = _get_writeback_client()
+    response = await wb_client.post(
+        path="/adjustments",
+        payload={
+            "adjustment_type": validated.adjustment_type,
+            "reference": validated.reference,
+            "caller_id": caller_id,
+            **validated.payload,
+        },
+    )
+
+    latency_ms = (time.perf_counter() - start) * 1000
+
+    result: dict[str, Any] = {
+        "adjustment_type": validated.adjustment_type,
+        "reference": validated.reference,
+        "status": response.body.get("status", "submitted"),
+        "confirmation_id": response.body.get("confirmation_id", ""),
+    }
+
+    # 4. Audit — always recorded for writes
+    await _get_audit_log().record(
+        tool_name="post_adjustment",
+        caller_id=caller_id,
+        input_hash=hash_payload({
+            "adjustment_type": validated.adjustment_type,
+            "reference": validated.reference,
+            "payload_keys": sorted(validated.payload.keys()),
+        }),
+        output_hash=hash_payload(result),
+        latency_ms=latency_ms,
+        decision=validated.adjustment_type,
+    )
+
+    return result
