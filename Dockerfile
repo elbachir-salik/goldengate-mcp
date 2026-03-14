@@ -23,7 +23,12 @@ RUN pip install --upgrade pip hatchling
 # Copy dependency spec first (layer cache)
 COPY pyproject.toml ./
 
-# Install all runtime dependencies into a prefix we can copy
+# Install all runtime dependencies into a prefix we can copy.
+# python-oracledb is included here for standard PyPI setups.
+# If your corporate mirror does not carry it, override the index:
+#   docker build --build-arg ORACLEDB_INDEX=https://your-mirror/simple ...
+# and adjust the RUN line below accordingly.
+ARG ORACLEDB_INDEX=https://pypi.org/simple
 RUN pip install --prefix=/install \
     fastmcp \
     pydantic \
@@ -33,7 +38,8 @@ RUN pip install --prefix=/install \
     anthropic \
     httpx \
     tenacity \
-    confluent-kafka
+    confluent-kafka && \
+    pip install --prefix=/install --index-url "${ORACLEDB_INDEX}" python-oracledb
 
 # ------------------------------------------------------------------
 # Stage 2 — runtime
@@ -51,11 +57,6 @@ COPY --from=builder /install /usr/local
 # Copy application source
 COPY src/ src/
 COPY pyproject.toml ./
-
-# python-oracledb ships as a wheel — install separately so it can be
-# substituted by a corp mirror without rebuilding the rest of the image.
-# Uncomment and adjust if available on your PyPI mirror:
-# RUN pip install python-oracledb
 
 # Default env — override with --env-file .env at runtime
 ENV PYTHONUNBUFFERED=1 \

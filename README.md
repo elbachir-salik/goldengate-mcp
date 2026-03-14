@@ -144,7 +144,7 @@ All settings are loaded from environment variables (or `.env` file).
 | `RBAC_SCORE_ROLES` | `analyst,agent-score` | Comma-separated roles for score tier |
 | `RBAC_WRITE_ROLES` | `compliance-officer,agent-write` | Comma-separated roles for write tier |
 | `RBAC_STRICT` | `false` | Reject calls with no auth context |
-| `AUDIT_LOG_MODE` | `file` | `file` or `oracle` |
+| `AUDIT_LOG_MODE` | `file` | `file` or `oracle` — see `docs/oracle_setup.sql` for required DDL |
 | `AUDIT_LOG_FILE_PATH` | `audit.log` | Path for file-mode audit log |
 | `SCHEMA_MAP_PATH` | `src/schema/schema_map.yaml` | Path to schema mapping YAML |
 

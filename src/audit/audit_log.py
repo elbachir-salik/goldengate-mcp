@@ -83,6 +83,7 @@ class AuditLog:
         """
         self._settings = settings
         self._oracle_client = oracle_client
+        self._oracle_table_verified = False  # checked once on first write
 
     async def record(
         self,
@@ -154,11 +155,43 @@ class AuditLog:
         The table is expected to have columns matching the entry keys:
             TOOL_NAME, CALLER_ID, TIMESTAMP_UTC, INPUT_HASH,
             OUTPUT_HASH, LATENCY_MS, DECISION
+
+        See docs/oracle_setup.sql for the required DDL.
         """
         if self._oracle_client is None:
             raise RuntimeError(
                 "audit_log_mode='oracle' requires an OracleClient instance."
             )
+
+        # Check once on first write that the AUDIT_LOG table exists.
+        # A missing table would otherwise be silently swallowed on every call.
+        if not self._oracle_table_verified:
+            exists_sql = (
+                "SELECT COUNT(*) AS CNT FROM USER_TABLES "
+                "WHERE TABLE_NAME = 'AUDIT_LOG'"
+            )
+            try:
+                rows = await self._oracle_client.query(
+                    query_key="audit_table_check",
+                    sql=exists_sql,
+                    bind_params={},
+                    max_rows=1,
+                )
+                if not rows or rows[0].get("CNT", 0) == 0:
+                    log.error(
+                        "audit_oracle_table_missing",
+                        hint="Run docs/oracle_setup.sql to create the AUDIT_LOG table.",
+                    )
+                    raise RuntimeError(
+                        "AUDIT_LOG table does not exist in Oracle. "
+                        "Run docs/oracle_setup.sql to create it, then restart the server."
+                    )
+                self._oracle_table_verified = True
+            except RuntimeError:
+                raise
+            except Exception as exc:
+                log.error("audit_oracle_table_check_failed", error=str(exc))
+                raise
 
         # SQL is defined inline here because AUDIT_LOG is an infrastructure
         # table, not a business entity — it is not in schema_map.yaml.
