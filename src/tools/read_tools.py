@@ -4,6 +4,9 @@ Read tools — query the Oracle GoldenGate replica (read-only).
 Tools registered here:
     get_entity              — generic entity fetch by type + ID
     get_transaction_history — paginated transaction history for an account
+    get_realtime_events     — recent CDC events from Kafka (Oracle fallback)
+    get_gl_position         — GL balance for reconciliation
+    get_open_alerts         — query open alerts by type / status
 
 All tools require the "read" RBAC tier.
 All inputs are validated with Pydantic before any DB access.
@@ -13,8 +16,9 @@ Every call produces an immutable audit log entry.
 
 from __future__ import annotations
 
+import asyncio
 import time
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Any
 
 from fastmcp import Context, FastMCP
@@ -266,6 +270,289 @@ async def get_transaction_history(
 
     # 4. Map physical column names → logical names and return
     return [_map_row_to_logical(row, mapper, "transaction") for row in rows]
+
+
+# ------------------------------------------------------------------
+# Input models — new tools
+# ------------------------------------------------------------------
+
+class _GetRealtimeEventsInput(BaseModel):
+    topic: str = Field(min_length=1, max_length=200)
+    lookback_minutes: int = Field(default=5, ge=1, le=60)
+
+
+class _GetGLPositionInput(BaseModel):
+    account_code: str = Field(
+        min_length=1,
+        max_length=50,
+        pattern=r"^[A-Za-z0-9_\-]+$",
+    )
+    currency: str = Field(
+        min_length=3,
+        max_length=3,
+        pattern=r"^[A-Z]{3}$",
+    )
+    value_date: date
+
+
+VALID_ALERT_TYPES = frozenset({"fraud", "aml", "recon_break", "custom"})
+VALID_ALERT_STATUSES = frozenset({"open", "closed", "escalated", "pending"})
+
+
+class _GetOpenAlertsInput(BaseModel):
+    alert_type: str | None = None
+    status: str | None = None
+    limit: int = Field(default=50, ge=1, le=200)
+
+    @model_validator(mode="after")
+    def validate_enums(self) -> _GetOpenAlertsInput:
+        if self.alert_type is not None and self.alert_type not in VALID_ALERT_TYPES:
+            raise ValueError(
+                f"Invalid alert_type '{self.alert_type}'. "
+                f"Valid values: {sorted(VALID_ALERT_TYPES)}. "
+                f"Pass None to retrieve all alert types."
+            )
+        if self.status is not None and self.status not in VALID_ALERT_STATUSES:
+            raise ValueError(
+                f"Invalid status '{self.status}'. "
+                f"Valid values: {sorted(VALID_ALERT_STATUSES)}. "
+                f"Pass None to retrieve all statuses."
+            )
+        return self
+
+
+# ------------------------------------------------------------------
+# Dependency helpers — new tools
+# ------------------------------------------------------------------
+
+def _get_kafka_consumer() -> Any:
+    """Return the server-level KafkaConsumer singleton (lazy, mockable)."""
+    from src.server import get_kafka_consumer  # type: ignore[import]
+    return get_kafka_consumer()
+
+
+# ------------------------------------------------------------------
+# Tools — get_realtime_events, get_gl_position, get_open_alerts
+# ------------------------------------------------------------------
+
+@mcp.tool()
+@require_role("read")
+async def get_realtime_events(
+    topic: str,
+    lookback_minutes: int = 5,
+    ctx: Context | None = None,
+) -> list[dict[str, Any]]:
+    """Return recent CDC change events from a Kafka topic (or Oracle fallback).
+
+    Tries Kafka first; automatically falls back to querying the Oracle replica
+    if Kafka is disabled or unreachable.  An empty result is valid — it means
+    no events occurred in the lookback window.
+
+    Args:
+        topic:            Kafka topic name (e.g. "banking.transactions").
+                          When using Oracle fallback this is ignored — all
+                          recent transactions are returned.
+        lookback_minutes: How far back to look (1–60 minutes, default 5).
+                          For windows longer than 60 minutes use
+                          get_transaction_history() instead.
+        ctx:              FastMCP context (injected by the framework).
+
+    Returns:
+        List of CDC event dicts. Kafka events are normalised to:
+            { op, table, before, after, ts_ms }
+        Oracle fallback events are transaction rows with logical column names.
+
+    Raises:
+        ValidationError: If lookback_minutes is outside 1–60.
+    """
+    start = time.perf_counter()
+    caller_id = _caller_id(ctx)
+
+    validated = _GetRealtimeEventsInput(topic=topic, lookback_minutes=lookback_minutes)
+
+    source = "kafka"
+    events: list[dict] = []
+
+    kafka = _get_kafka_consumer()
+    if kafka.is_enabled():
+        try:
+            events = await asyncio.to_thread(
+                kafka.consume, validated.topic, validated.lookback_minutes
+            )
+        except Exception:
+            source = "oracle_fallback"
+    else:
+        source = "oracle_fallback"
+
+    if source == "oracle_fallback":
+        mapper = _get_mapper()
+        since_ts = datetime.now(timezone.utc).replace(tzinfo=None) - \
+                   __import__("datetime").timedelta(minutes=validated.lookback_minutes)
+        sql = queries.build_get_realtime_events_fallback_query(mapper)
+        client = _get_oracle_client()
+        rows = await client.query(
+            query_key=queries.GET_REALTIME_EVENTS_FALLBACK,
+            sql=sql,
+            bind_params={"since_timestamp": since_ts, "limit": 500},
+            max_rows=500,
+        )
+        events = [_map_row_to_logical(r, mapper, "transaction") for r in rows]
+
+    latency_ms = (time.perf_counter() - start) * 1000
+
+    await _get_audit_log().record(
+        tool_name="get_realtime_events",
+        caller_id=caller_id,
+        input_hash=hash_payload({"topic": validated.topic,
+                                  "lookback_minutes": validated.lookback_minutes}),
+        output_hash=hash_payload(events),
+        latency_ms=latency_ms,
+        decision=source,
+    )
+    return events
+
+
+@mcp.tool()
+@require_role("read")
+async def get_gl_position(
+    account_code: str,
+    currency: str,
+    value_date: str,
+    ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Fetch the GL balance for an account, currency, and value date.
+
+    Args:
+        account_code: GL account code (alphanumeric, dash, underscore; max 50 chars).
+                      Example: "1001-USD".
+        currency:     ISO 4217 3-letter currency code in uppercase (e.g. "USD", "EUR").
+        value_date:   Balance date in ISO 8601 format YYYY-MM-DD.
+        ctx:          FastMCP context (injected by the framework).
+
+    Returns:
+        Dict of GL fields keyed by logical column names:
+        account_code, currency, value_date, debit_balance,
+        credit_balance, net_balance.
+
+    Raises:
+        ValidationError:     If any input fails validation.
+        EntityNotFoundError: If no GL position exists for the given key.
+                             Try a different value_date (must be a business day)
+                             or verify the account_code with get_entity("account").
+    """
+    start = time.perf_counter()
+    caller_id = _caller_id(ctx)
+
+    validated = _GetGLPositionInput(
+        account_code=account_code,
+        currency=currency,
+        value_date=value_date,  # type: ignore[arg-type]
+    )
+
+    mapper = _get_mapper()
+    sql = queries.build_get_gl_position_query(mapper)
+    client = _get_oracle_client()
+    rows = await client.query(
+        query_key=queries.GET_GL_POSITION,
+        sql=sql,
+        bind_params={
+            "account_code": validated.account_code,
+            "currency": validated.currency,
+            "value_date": validated.value_date,
+        },
+        max_rows=1,
+    )
+
+    latency_ms = (time.perf_counter() - start) * 1000
+    output = rows[0] if rows else {}
+
+    await _get_audit_log().record(
+        tool_name="get_gl_position",
+        caller_id=caller_id,
+        input_hash=hash_payload({
+            "account_code": validated.account_code,
+            "currency": validated.currency,
+            "value_date": str(validated.value_date),
+        }),
+        output_hash=hash_payload(output),
+        latency_ms=latency_ms,
+        decision=None,
+    )
+
+    if not rows:
+        raise EntityNotFoundError(
+            f"No GL position found for account '{validated.account_code}', "
+            f"currency '{validated.currency}', date '{validated.value_date}'. "
+            f"Confirm the value_date is a business day and the account_code format "
+            f"is correct (e.g. '1001-USD'). "
+            f"Try get_entity('account', '{validated.account_code}') to verify the account exists."
+        )
+
+    return _map_row_to_logical(rows[0], mapper, "gl_entry")
+
+
+@mcp.tool()
+@require_role("read")
+async def get_open_alerts(
+    alert_type: str | None = None,
+    status: str | None = None,
+    limit: int = 50,
+    ctx: Context | None = None,
+) -> list[dict[str, Any]]:
+    """Return open alerts from the alert queue, with optional filters.
+
+    Args:
+        alert_type: Filter by alert type. One of: "fraud", "aml",
+                    "recon_break", "custom". Pass None (default) for all types.
+        status:     Filter by status. One of: "open", "closed", "escalated",
+                    "pending". Pass None (default) for all statuses.
+        limit:      Maximum number of alerts to return (1–200, default 50).
+                    Results are ordered by creation time descending.
+        ctx:        FastMCP context (injected by the framework).
+
+    Returns:
+        List of alert dicts keyed by logical column names.
+        Empty list means no alerts match the filters — not an error.
+
+    Raises:
+        ValidationError: If alert_type or status is not a recognised value,
+                         or limit is outside 1–200.
+    """
+    start = time.perf_counter()
+    caller_id = _caller_id(ctx)
+
+    validated = _GetOpenAlertsInput(alert_type=alert_type, status=status, limit=limit)
+
+    mapper = _get_mapper()
+    sql = queries.build_get_open_alerts_query(mapper)
+    client = _get_oracle_client()
+    rows = await client.query(
+        query_key=queries.GET_OPEN_ALERTS,
+        sql=sql,
+        bind_params={
+            "alert_type": validated.alert_type,
+            "status": validated.status,
+            "limit": validated.limit,
+        },
+        max_rows=validated.limit,
+    )
+
+    latency_ms = (time.perf_counter() - start) * 1000
+
+    await _get_audit_log().record(
+        tool_name="get_open_alerts",
+        caller_id=caller_id,
+        input_hash=hash_payload({
+            "alert_type": validated.alert_type,
+            "status": validated.status,
+            "limit": validated.limit,
+        }),
+        output_hash=hash_payload(rows),
+        latency_ms=latency_ms,
+        decision=None,
+    )
+
+    return [_map_row_to_logical(row, mapper, "alert") for row in rows]
 
 
 # ------------------------------------------------------------------
