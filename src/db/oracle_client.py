@@ -15,12 +15,14 @@ query_key (a plain string used for audit/logging).
 from __future__ import annotations
 
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import oracledb
 import structlog
 
 from src.config import Settings
+
+if TYPE_CHECKING:
+    import oracledb  # only needed for type hints — not imported at runtime
 
 log = structlog.get_logger(__name__)
 
@@ -45,7 +47,7 @@ class OracleClient:
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
-        self._pool: oracledb.AsyncConnectionPool | None = None
+        self._pool: Any = None  # oracledb.AsyncConnectionPool at runtime
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -59,6 +61,7 @@ class OracleClient:
                 credentials, Oracle not reachable).
         """
         try:
+            import oracledb  # lazy import — not available in test environments
             self._pool = oracledb.create_pool_async(
                 user=self._settings.oracle_user,
                 password=self._settings.oracle_password.get_secret_value(),
@@ -120,7 +123,7 @@ class OracleClient:
             )
 
         start = time.perf_counter()
-        connection: oracledb.AsyncConnection | None = None
+        connection: Any = None  # oracledb.AsyncConnection at runtime
 
         try:
             connection = await self._pool.acquire()

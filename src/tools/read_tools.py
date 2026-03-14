@@ -22,7 +22,6 @@ from pydantic import BaseModel, Field, model_validator
 
 from src.audit.audit_log import AuditLog, hash_payload
 from src.auth.rbac import require_role
-from src.db import oracle_client as _oc_module
 from src.db import queries
 from src.schema.mapper import SchemaConfigError, SchemaMapper
 
@@ -73,7 +72,7 @@ class _GetTransactionHistoryInput(BaseModel):
 # Dependency helpers
 # ------------------------------------------------------------------
 
-def _get_oracle_client() -> _oc_module.OracleClient:
+def _get_oracle_client() -> Any:
     """Return the server-level OracleClient singleton.
 
     Imported lazily so tests can swap the dependency before importing tools.

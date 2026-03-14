@@ -9,7 +9,7 @@ description = "GoldenGate MCP Server — Real-Time Banking AI Layer"
 requires-python = ">=3.11"
 dependencies = [
     "fastmcp>=2.3.4",
-    "python-oracledb>=2.5.0",
+    "python-oracledb>=2.0.0",  # install separately if not on PyPI mirror
     "pydantic>=2.10.0",
     "pydantic-settings>=2.10.1",
     "structlog>=24.4.0",
