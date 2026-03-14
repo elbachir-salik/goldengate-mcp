@@ -15,7 +15,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import SecretStr, field_validator
+from pydantic import SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -129,6 +129,15 @@ class Settings(BaseSettings):
         if v < 1:
             raise ValueError("oracle_pool_max must be >= 1")
         return v
+
+    @model_validator(mode="after")
+    def pool_max_gte_pool_min(self) -> Settings:
+        if self.oracle_pool_max < self.oracle_pool_min:
+            raise ValueError(
+                f"oracle_pool_max ({self.oracle_pool_max}) must be >= "
+                f"oracle_pool_min ({self.oracle_pool_min})"
+            )
+        return self
 
     @field_validator("writeback_timeout_seconds")
     @classmethod

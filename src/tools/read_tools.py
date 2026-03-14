@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from fastmcp import Context, FastMCP
@@ -387,7 +387,7 @@ async def get_realtime_events(
     if source == "oracle_fallback":
         mapper = _get_mapper()
         since_ts = datetime.now(timezone.utc).replace(tzinfo=None) - \
-                   __import__("datetime").timedelta(minutes=validated.lookback_minutes)
+                   timedelta(minutes=validated.lookback_minutes)
         sql = queries.build_get_realtime_events_fallback_query(mapper)
         client = _get_oracle_client()
         rows = await client.query(

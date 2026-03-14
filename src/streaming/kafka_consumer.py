@@ -177,6 +177,24 @@ class KafkaConsumer:
 # Internal helpers
 # ------------------------------------------------------------------
 
+def _parse_ts_ms(current_ts: str | None) -> int | None:
+    """Convert a GoldenGate current_ts string to epoch milliseconds.
+
+    GoldenGate CDC JSON uses the format ``"YYYY-MM-DD HH:MM:SS.mmm"`` for
+    timestamps — not a bare integer.  Returns ``None`` on any parse failure
+    so callers can handle a missing timestamp gracefully.
+    """
+    if not current_ts:
+        return None
+    try:
+        from datetime import datetime, timezone
+        dt = datetime.strptime(str(current_ts), "%Y-%m-%d %H:%M:%S.%f")
+        return int(dt.replace(tzinfo=timezone.utc).timestamp() * 1000)
+    except Exception:
+        log.warning("kafka_ts_parse_failed", current_ts=current_ts)
+        return None
+
+
 def _normalise_event(raw: bytes | None) -> dict | None:
     """Parse a raw Kafka message value into a normalised CDC event dict.
 
@@ -204,5 +222,5 @@ def _normalise_event(raw: bytes | None) -> dict | None:
         "table": payload.get("table", ""),
         "before": payload.get("before"),
         "after":  payload.get("after"),
-        "ts_ms":  payload.get("current_ts", ""),
+        "ts_ms":  _parse_ts_ms(payload.get("current_ts")),
     }

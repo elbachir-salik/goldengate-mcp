@@ -81,6 +81,24 @@ def test_mock_kafka_reset_clears_state() -> None:
     assert mock.call_count() == 0
 
 
+def test_normalised_event_ts_ms_is_int() -> None:
+    """_parse_ts_ms() must return an int for a valid GoldenGate timestamp string."""
+    from src.streaming.kafka_consumer import _parse_ts_ms
+
+    result = _parse_ts_ms("2024-01-15 10:30:00.000")
+    assert isinstance(result, int)
+    assert result > 0
+
+
+def test_normalised_event_ts_ms_none_on_bad_format() -> None:
+    """_parse_ts_ms() must return None when the timestamp cannot be parsed."""
+    from src.streaming.kafka_consumer import _parse_ts_ms
+
+    assert _parse_ts_ms("bad") is None
+    assert _parse_ts_ms("") is None
+    assert _parse_ts_ms(None) is None
+
+
 def test_mock_kafka_returns_copy_of_fixture() -> None:
     """Mutating the returned list must not affect the fixture."""
     mock = MockKafkaConsumer(enabled=True)

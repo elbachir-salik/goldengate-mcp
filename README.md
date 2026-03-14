@@ -33,6 +33,8 @@ The core banking system is treated as a **black box**. The server connects only 
 | `flag_entity` | Flag, block, or unblock an entity via the configured write-back endpoint |
 | `post_adjustment` | Post a GL correction, hold release, or workflow approval/rejection |
 
+> **Note:** Write tools (`flag_entity`, `post_adjustment`) require `WRITEBACK_BASE_URL` to be configured. They are always registered but return a configuration error if called without it.
+
 ---
 
 ## Architecture
