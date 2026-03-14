@@ -183,7 +183,9 @@ async def get_entity(
     # 5. Return
     if not rows:
         raise EntityNotFoundError(
-            f"No {validated.entity_type} found with id '{validated.entity_id}'"
+            f"No {validated.entity_type} found with id '{validated.entity_id}'. "
+            f"Verify the id is correct, or try get_open_alerts(subject_id='{validated.entity_id}') "
+            f"to check for related alerts."
         )
 
     return _map_row_to_logical(rows[0], mapper, validated.entity_type)

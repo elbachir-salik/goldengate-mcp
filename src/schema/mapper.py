@@ -108,7 +108,8 @@ class SchemaMapper:
         if logical_name not in columns:
             raise SchemaConfigError(
                 f"Column '{logical_name}' not found on entity '{entity_type}'. "
-                f"Available columns: {sorted(columns.keys())}"
+                f"Available columns: {sorted(columns.keys())}. "
+                f"Check schema_map.yaml for the full column list."
             )
         return columns[logical_name]
 
@@ -141,7 +142,8 @@ class SchemaMapper:
         if entity_type not in self._entities:
             raise SchemaConfigError(
                 f"Unknown entity type '{entity_type}'. "
-                f"Configured types: {sorted(self._entities.keys())}"
+                f"Valid types are: {sorted(self._entities.keys())}. "
+                f"Use get_entity() with one of these types."
             )
 
 

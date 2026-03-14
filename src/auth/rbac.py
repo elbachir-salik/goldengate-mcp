@@ -109,7 +109,8 @@ def require_role(tier: ToolTier) -> Callable:
                 if caller_role not in allowed:
                     raise PermissionDeniedError(
                         f"Role '{caller_role}' is not authorised for the '{tier}' tier. "
-                        f"Required one of: {sorted(allowed)}"
+                        f"Required one of: {sorted(allowed)}. "
+                        f"Contact your administrator to request an elevated role."
                     )
                 log.debug(
                     "rbac_ok",

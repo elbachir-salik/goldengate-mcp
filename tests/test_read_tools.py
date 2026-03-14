@@ -181,7 +181,7 @@ async def test_get_entity_not_found(
     # No fixture registered → returns []
     p1, p2, p3 = _patch_deps(mock_oracle, mock_audit, mapper)
     with p1, p2, p3:
-        with pytest.raises(EntityNotFoundError, match="No customer found"):
+        with pytest.raises(EntityNotFoundError, match="No customer found with id 'MISSING'"):
             await get_entity(entity_type="customer", entity_id="MISSING")
 
 
