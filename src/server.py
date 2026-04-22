@@ -7,7 +7,7 @@ the full dependency lifecycle:
     Startup:
         1. Load Settings (validates all env vars)
         2. Initialise SchemaMapper (parses schema_map.yaml)
-        3. Initialise OracleClient (opens async connection pool)
+        3. Initialise OracleClient if ORACLE_PASSWORD is set (otherwise skipped for local testing)
         4. Initialise KafkaConsumer  (if KAFKA_BROKERS is set)
         5. Initialise WritebackClient (if WRITEBACK_BASE_URL is set)
         6. Initialise CircuitBreaker  (always — in-memory, no I/O)
@@ -42,7 +42,7 @@ from fastmcp import FastMCP
 
 from src.audit.audit_log import AuditLog
 from src.config import get_settings
-from src.db.oracle_client import OracleClient
+from src.db.oracle_client import OracleClient, OracleClientError
 from src.schema.mapper import SchemaMapper, get_mapper
 from src.writeback.circuit_breaker import CircuitBreaker
 
@@ -67,9 +67,10 @@ _anthropic_client: Any = None
 def get_oracle_client() -> OracleClient:
     if _oracle_client is None:
         raise RuntimeError(
-            "OracleClient is not initialised. "
-            "Ensure the MCP server started correctly and the Oracle pool is up. "
-            "Check ORACLE_DSN, ORACLE_USER, and ORACLE_PASSWORD in your .env file."
+            "OracleClient is not available. "
+            "Set ORACLE_PASSWORD in your .env file (non-empty) and ensure Oracle is reachable, "
+            "or the pool failed to start — check server logs. "
+            "Read and score tools that query the replica require a working Oracle connection."
         )
     return _oracle_client
 
@@ -139,10 +140,33 @@ async def _lifespan(app: FastMCP):  # type: ignore[type-arg]
     get_mapper()  # warms the singleton; raises SchemaConfigError on bad YAML
     log.info("schema_mapper_ready", path=settings.schema_map_path)
 
-    # 2. Oracle client
-    _oracle_client = OracleClient(settings)
-    await _oracle_client.initialize()
-    log.info("oracle_client_ready", dsn=settings.oracle_dsn)
+    # 2. Oracle client (optional — empty ORACLE_PASSWORD skips; failed init logs and continues)
+    _oracle_client = None
+    if settings.oracle_enabled:
+        _oracle_client = OracleClient(settings)
+        try:
+            await _oracle_client.initialize()
+            log.info("oracle_client_ready", dsn=settings.oracle_dsn)
+        except OracleClientError as exc:
+            log.warning(
+                "oracle_client_init_failed",
+                dsn=settings.oracle_dsn,
+                error=str(exc),
+                hint="Server runs without Oracle; set valid ORACLE_* and restart to enable DB tools.",
+            )
+            _oracle_client = None
+    else:
+        log.info(
+            "oracle_client_skipped",
+            reason="ORACLE_PASSWORD empty — Oracle disabled (local testing / MCP Inspector).",
+        )
+
+    if settings.audit_log_mode == "oracle" and _oracle_client is None:
+        log.warning(
+            "audit_oracle_without_client",
+            hint="AUDIT_LOG_MODE=oracle requires a working Oracle pool. "
+            "Use AUDIT_LOG_MODE=file for testing without Oracle, or fix ORACLE_* and restart.",
+        )
 
     # 3. Kafka consumer (optional)
     if settings.kafka_enabled:

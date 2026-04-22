@@ -10,6 +10,5 @@ from __future__ import annotations
 
 import os
 
-# ORACLE_PASSWORD has no default (required in production).
-# Provide a placeholder here so get_settings() succeeds in the test suite.
+# Optional: non-empty password for tests that read env before Settings() defaults apply.
 os.environ.setdefault("ORACLE_PASSWORD", "test-placeholder")

@@ -37,7 +37,9 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------
     oracle_dsn: str = "localhost:1521/ORCL"
     oracle_user: str = "mcp_reader"
-    oracle_password: SecretStr  # required — no default; set ORACLE_PASSWORD in .env
+    # Empty = server starts without an Oracle pool (local MCP / Inspector testing).
+    # Set a real value for production and for read/score tools that query the replica.
+    oracle_password: SecretStr = SecretStr("")
     oracle_pool_min: int = 2
     oracle_pool_max: int = 10
     oracle_query_retry_attempts: int = 2  # retries on transient errors (0 = no retry)
@@ -90,6 +92,11 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------
     # Derived helpers (not env vars)
     # ------------------------------------------------------------------
+    @property
+    def oracle_enabled(self) -> bool:
+        """True if ORACLE_PASSWORD is set (non-whitespace) — pool will be attempted at startup."""
+        return bool(self.oracle_password.get_secret_value().strip())
+
     @property
     def kafka_enabled(self) -> bool:
         """True if Kafka brokers are configured."""

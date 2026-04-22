@@ -93,13 +93,15 @@ Copy the example env file and fill in your values:
 cp .env.example .env
 ```
 
-Minimum required for read tools:
+Minimum required for read tools (real replica):
 
 ```env
 ORACLE_DSN=your-host:1521/ORCL
 ORACLE_USER=mcp_reader
 ORACLE_PASSWORD=your-password
 ```
+
+**Local testing without Oracle:** leave `ORACLE_PASSWORD` empty (or omit it). The server starts and MCP tools still register; read/score tools that hit the database will error until you configure a working Oracle connection.
 
 ### 3. Run
 
@@ -128,7 +130,7 @@ All settings are loaded from environment variables (or `.env` file).
 |----------|---------|-------------|
 | `ORACLE_DSN` | `localhost:1521/ORCL` | Oracle connection string |
 | `ORACLE_USER` | `mcp_reader` | Oracle username |
-| `ORACLE_PASSWORD` | *(required)* | Oracle password |
+| `ORACLE_PASSWORD` | *(empty)* | Non-empty = open replica pool at startup; empty = skip Oracle (local MCP testing) |
 | `ORACLE_POOL_MIN` | `2` | Minimum pool connections |
 | `ORACLE_POOL_MAX` | `10` | Maximum pool connections |
 | `ORACLE_QUERY_RETRY_ATTEMPTS` | `2` | Retries on transient Oracle errors (`0` = no retry) |
