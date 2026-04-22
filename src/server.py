@@ -27,9 +27,9 @@ Singleton accessors (imported lazily by tool modules):
     get_anthropic_client()
 
 Run:
-    fastmcp run src/server.py        (stdio transport — Claude Desktop)
-    fastmcp run src/server.py:mcp    (explicit object reference)
-    python -m src.server             (direct, for testing)
+    python -m src.server             (Streamable HTTP on 127.0.0.1:8000 — MCP Inspector)
+    fastmcp run src/server.py        (stdio — Claude Desktop; requires fastmcp on PATH)
+    fastmcp run src/server.py --transport streamable-http --port 8000
 """
 
 from __future__ import annotations
@@ -259,6 +259,14 @@ mcp.mount(_write_mcp)
 # ------------------------------------------------------------------
 # Direct execution (python -m src.server or python src/server.py)
 # ------------------------------------------------------------------
+# Default when run as __main__: Streamable HTTP for MCP Inspector and HTTP clients.
+# Claude Desktop / stdio: use `fastmcp run src/server.py` (default CLI transport is stdio).
+_DEFAULT_MCP_HTTP_HOST = "127.0.0.1"
+_DEFAULT_MCP_HTTP_PORT = 8000
 
 if __name__ == "__main__":
-    mcp.run()
+    mcp.run(
+        transport="streamable-http",
+        host=_DEFAULT_MCP_HTTP_HOST,
+        port=_DEFAULT_MCP_HTTP_PORT,
+    )

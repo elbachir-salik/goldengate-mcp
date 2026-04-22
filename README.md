@@ -106,12 +106,17 @@ ORACLE_PASSWORD=your-password
 ### 3. Run
 
 ```bash
-# stdio transport (Claude Desktop compatible)
+# Streamable HTTP on http://127.0.0.1:8000/mcp (default when using Python directly — MCP Inspector)
+python -m src.server
+
+# stdio transport (Claude Desktop compatible) — requires fastmcp CLI on PATH
 fastmcp run src/server.py
 
-# HTTP transport (for testing or multi-client use)
-fastmcp run src/server.py --transport streamable-http --port 8000
+# Same HTTP as `python -m src.server` but via CLI (optional)
+fastmcp run src/server.py --transport streamable-http --host 127.0.0.1 --port 8000
 ```
+
+Direct `python -m src.server` uses **Streamable HTTP** bound to **`127.0.0.1:8000`**. Connect the MCP Inspector to **`http://127.0.0.1:8000/mcp`** (transport: Streamable HTTP).
 
 ### 4. Docker
 
