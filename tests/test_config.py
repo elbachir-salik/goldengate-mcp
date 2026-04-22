@@ -34,3 +34,21 @@ def test_pool_max_equals_pool_min_ok() -> None:
     )
     assert settings.oracle_pool_min == 5
     assert settings.oracle_pool_max == 5
+
+
+def test_oracle_enabled_false_when_password_empty() -> None:
+    from pydantic import SecretStr
+
+    from src.config import Settings
+
+    s = Settings(oracle_password=SecretStr(""))
+    assert s.oracle_enabled is False
+
+
+def test_oracle_enabled_true_when_password_set() -> None:
+    from pydantic import SecretStr
+
+    from src.config import Settings
+
+    s = Settings(oracle_password=SecretStr("secret"))
+    assert s.oracle_enabled is True
